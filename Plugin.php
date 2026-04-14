@@ -232,6 +232,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         ];
 
         // Pre-fetch all SportsDB events for the full date range
+        $context->info('Fetching SportsDB events for date range...');
         $context->heartbeat('Fetching SportsDB events for date range...');
         $allEvents = $this->fetchEventsForDateRange(
             $currentDate->copy(),
@@ -274,6 +275,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
             $storedEnrichedHash = $fileStates[$fileName]['enriched_hash'] ?? null;
 
             if ($storedSourceHash !== null && ($currentHash === $storedSourceHash || $currentHash === $storedEnrichedHash)) {
+                $context->info("Skipping {$dateStr} ({$dayIndex}/{$totalDays}) - unchanged");
                 $context->heartbeat(
                     "Skipping {$dateStr} ({$dayIndex}/{$totalDays}) - unchanged",
                     progress: (int) (($dayIndex / $totalDays) * 100)
@@ -286,6 +288,8 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                 continue;
             }
 
+            $dayEventsCount = count($allEvents[$dateStr] ?? []);
+            $context->info("Processing {$dateStr} ({$dayIndex}/{$totalDays}) - {$dayEventsCount} events available");
             $context->heartbeat(
                 "Processing {$dateStr} ({$dayIndex}/{$totalDays})...",
                 progress: (int) (($dayIndex / $totalDays) * 100)
@@ -380,6 +384,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                 $stats['events_fetched'] += count($events);
                 $allEvents[$dateStr] = $events;
 
+                $context->info("Fetched {$dateStr}: " . count($events) . ' TV events (premium)');
                 $context->heartbeat("Fetched {$dateStr}: " . count($events) . ' TV events (premium)');
             } else {
                 foreach (self::SPORT_TYPES as $sport) {
@@ -407,6 +412,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
 
                 $allEvents[$dateStr] = array_values($allEvents[$dateStr]);
                 $eventCount = count($allEvents[$dateStr]);
+                $context->info("Fetched {$dateStr}: {$eventCount} events across " . count(self::SPORT_TYPES) . ' sport types');
                 $context->heartbeat("Fetched {$dateStr}: {$eventCount} events across " . count(self::SPORT_TYPES) . ' sport types');
             }
 
@@ -554,6 +560,9 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
 
                 $matchedEvent = $this->matchSportsEvent($programme, $events);
                 if ($matchedEvent) {
+                    $eventName = $matchedEvent['strEvent'] ?? 'unknown';
+                    $context->info("Matched: \"{$programme['title']}\" → \"{$eventName}\"");
+
                     $enrichResult = $this->enrichFromSportsDb(
                         $programme,
                         $matchedEvent,
@@ -571,6 +580,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                         $result['skipped']++;
                     }
                 } else {
+                    $context->info("Unmatched: \"{$programme['title']}\"");
                     $result['skipped']++;
                 }
 
@@ -654,14 +664,14 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         }
 
         // Require a reasonable confidence score
-        return $bestScore >= 40 ? $bestMatch : null;
+        return $bestScore >= 35 ? $bestMatch : null;
     }
 
     /**
      * Clean up EPG sports title for better matching.
      *
      * Removes common prefixes (Live, Es folgt:), suffixes (ᴸᶦᵛᵉ),
-     * league/season markers (25/26:), and normalizes separators.
+     * sport type prefixes (F1:, NHL:, ATP 500:), league/season markers.
      */
     private function cleanEpgSportsTitle(string $title): string
     {
@@ -669,69 +679,153 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         $title = preg_replace('/^live\s+/iu', '', $title);
         $title = preg_replace('/\s*ᴸᶦᵛᵉ\s*$/u', '', $title);
 
-        // Remove "Es folgt: " prefix
-        $title = preg_replace('/^es folgt:\s*/iu', '', $title);
+        // Remove "Es folgt: " or "Es folgt: Live " prefix
+        $title = preg_replace('/^es folgt:\s*(live\s+)?/iu', '', $title);
 
-        // Remove season markers like "25/26:" or "2025/2026:"
+        // Remove "Nur in Deutschland verfügbar!" suffix
+        $title = preg_replace('/\.?\s*nur in \w+ verfügbar!?\s*$/iu', '', $title);
+
+        // Remove sport type prefixes: "F1:", "NHL:", "ATP 1000:", "WTA 500:", "PL:", "UEFA CL:", etc.
+        $title = preg_replace('/^(?:F1|F1 Academy|F1 Sprint|MotoGP|IndyCar|NTT IndyCar Series|WRC|NASCAR)\s*:\s*/iu', '', $title);
+        $title = preg_replace('/^(?:NHL|NBA|NFL|NRL Rugby|NRL)\s*:\s*/iu', '', $title);
+        $title = preg_replace('/^(?:ATP|ATP \d+|WTA|WTA \d+)\s*:\s*/iu', '', $title);
+        $title = preg_replace('/^(?:PL|UCL|UEFA (?:CL|ECL|Champions League))\s*:\s*/iu', '', $title);
+        $title = preg_replace('/^(?:Bundesliga|DFB-Pokal|DFB-Pokal Frauen|Fußball|Fussball|Golf|Golf Ladies ET|Rugby Super League|TGL)\s*:\s*/iu', '', $title);
+        $title = preg_replace('/^(?:Live\s+)?(?:Sky Sport News|sportstudio)\s*:?\s*/iu', '', $title);
+
+        // Remove season markers like "25/26:" or "2025/2026:" (possibly preceded by league name)
         $title = preg_replace('/\d{2,4}\/\d{2,4}:\s*/', '', $title);
 
         // Remove round/matchday info like "29. Spieltag" or "32. Spieltag"
         $title = preg_replace('/,?\s*\d+\.\s*spieltag\s*/iu', '', $title);
 
+        // Remove round info like "Viertelfinale", "Halbfinale", "Finale", "Rückspiel", "Hinspiel"
+        $title = preg_replace('/,?\s*(?:Viertelfinale|Halbfinale|Finale|Achtelfinale|Rückspiel|Hinspiel)\s*/iu', '', $title);
+
+        // Remove day info like "1. Tag", "2. Tag", "Finaltag"
+        $title = preg_replace('/,?\s*(?:\d+\.\s*Tag|Finaltag)\b/iu', '', $title);
+
         // Normalize "Team @ Team" → "Team vs Team"
         $title = str_replace(' @ ', ' vs ', $title);
+
+        // Normalize " - " separator to " vs " for team matchups
+        // Only when it looks like "Team A - Team B" (not "F1: Rennen - GP China")
+        if (preg_match('/^([A-ZÄÖÜa-zäöü0-9][\w\s.]+\S)\s+-\s+(\S[\w\s.]+)$/u', trim($title), $m)) {
+            $title = $m[1] . ' vs ' . $m[2];
+        }
 
         return trim($title);
     }
 
     /**
+     * Extract team names from the EPG title for direct matching.
+     *
+     * Handles formats like "FC Bayern München - Borussia Dortmund" or "Team A vs Team B".
+     *
+     * @return array{home: string, away: string}|null
+     */
+    private function extractTeamNames(string $title): ?array
+    {
+        // Try "Team A - Team B" format (most common in German EPG)
+        if (preg_match('/^(.+?)\s+(?:vs\.?|[-–]|@)\s+(.+?)$/iu', $title, $m)) {
+            $home = trim($m[1]);
+            $away = trim($m[2]);
+
+            // Both parts should be at least 2 chars and not look like generic sport words
+            if (mb_strlen($home) >= 2 && mb_strlen($away) >= 2) {
+                return ['home' => mb_strtolower($home), 'away' => mb_strtolower($away)];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Common German→English team name mappings for fuzzy matching.
+     */
+    private const array TEAM_NAME_ALIASES = [
+        'münchen' => 'munich',
+        'mailand' => 'milan',
+        'neapel' => 'naples',
+        'lissabon' => 'lisbon',
+        'kopenhagen' => 'copenhagen',
+        'brügge' => 'bruges',
+        'athen' => 'athens',
+        'prag' => 'prague',
+        'warschau' => 'warsaw',
+        'bukarest' => 'bucharest',
+        'moskau' => 'moscow',
+        'donezk' => 'donetsk',
+    ];
+
+    /**
      * Compute a match score between a cleaned EPG title and a SportsDB event.
      *
      * Scoring:
-     *   - Bidirectional token overlap: up to 60 points
+     *   - Team name match (both teams): 50 points
+     *   - Team name match (one team): 25 points
+     *   - Bidirectional token overlap: up to 30 points
      *   - Time proximity (±90 min): up to 30 points
      *   - Sport type bonus: up to 5 points
-     *   - Team name containment bonus: up to 10 points
      */
     private function computeMatchScore(string $progTitle, string $eventName, ?string $progStart, array $event): float
     {
         $score = 0;
 
-        // Tokenize both titles
+        // Team-based matching: extract team names from EPG and compare to event teams
+        $homeTeam = mb_strtolower($event['strHomeTeam'] ?? '');
+        $awayTeam = mb_strtolower($event['strAwayTeam'] ?? '');
+        $progTitleAliased = $this->applyTeamAliases($progTitle);
+
+        $homeFound = $this->teamNameMatches($homeTeam, $progTitle, $progTitleAliased);
+        $awayFound = $this->teamNameMatches($awayTeam, $progTitle, $progTitleAliased);
+
+        // Also try matching EPG-extracted teams against event teams
+        $epgTeams = $this->extractTeamNames($progTitle);
+        if ($epgTeams && $homeTeam !== '' && $awayTeam !== '') {
+            $epgHome = $this->applyTeamAliases($epgTeams['home']);
+            $epgAway = $this->applyTeamAliases($epgTeams['away']);
+
+            // Check cross-matching (EPG home vs event home/away, EPG away vs event home/away)
+            if (! $homeFound) {
+                $homeFound = $this->fuzzyTeamContains($epgHome, $homeTeam)
+                    || $this->fuzzyTeamContains($epgAway, $homeTeam)
+                    || $this->fuzzyTeamContains($homeTeam, $epgHome)
+                    || $this->fuzzyTeamContains($homeTeam, $epgAway);
+            }
+            if (! $awayFound) {
+                $awayFound = $this->fuzzyTeamContains($epgHome, $awayTeam)
+                    || $this->fuzzyTeamContains($epgAway, $awayTeam)
+                    || $this->fuzzyTeamContains($awayTeam, $epgHome)
+                    || $this->fuzzyTeamContains($awayTeam, $epgAway);
+            }
+        }
+
+        if ($homeFound && $awayFound) {
+            $score += 50;
+        } elseif ($homeFound || $awayFound) {
+            $score += 25;
+        }
+
+        // Token-based matching
         $progTokens = $this->tokenize($progTitle);
         $eventTokens = $this->tokenize($eventName);
 
-        if (empty($progTokens) || empty($eventTokens)) {
-            return 0;
+        if (! empty($progTokens) && ! empty($eventTokens)) {
+            $forwardMatches = $this->countTokenOverlap($eventTokens, $progTokens);
+            $reverseMatches = $this->countTokenOverlap($progTokens, $eventTokens);
+
+            $forwardScore = $forwardMatches / count($eventTokens);
+            $reverseScore = $reverseMatches / count($progTokens);
+
+            // Use the average instead of min to be more forgiving with German titles
+            $tokenScore = ($forwardScore + $reverseScore) / 2;
+            $score += $tokenScore * 30;
         }
 
-        // Bidirectional token matching
-        $forwardMatches = $this->countTokenOverlap($eventTokens, $progTokens);
-        $reverseMatches = $this->countTokenOverlap($progTokens, $eventTokens);
-
-        $forwardScore = count($eventTokens) > 0 ? $forwardMatches / count($eventTokens) : 0;
-        $reverseScore = count($progTokens) > 0 ? $reverseMatches / count($progTokens) : 0;
-
-        $tokenScore = min($forwardScore, $reverseScore);
-
-        // Require at least 30% bidirectional overlap
-        if ($tokenScore < 0.3) {
+        // If we have no team match and very low token overlap, bail early
+        if ($score < 10) {
             return 0;
-        }
-
-        $score += $tokenScore * 60;
-
-        // Team name matching: check if home/away team names appear in the EPG title
-        $homeTeam = mb_strtolower($event['strHomeTeam'] ?? '');
-        $awayTeam = mb_strtolower($event['strAwayTeam'] ?? '');
-
-        $homeFound = $homeTeam !== '' && str_contains($progTitle, $homeTeam);
-        $awayFound = $awayTeam !== '' && str_contains($progTitle, $awayTeam);
-
-        if ($homeFound && $awayFound) {
-            $score += 10;
-        } elseif ($homeFound || $awayFound) {
-            $score += 5;
         }
 
         // Time proximity scoring
@@ -750,8 +844,8 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
 
                 if ($diffMinutes <= 90) {
                     $score += 30 * (1 - $diffMinutes / 90);
-                } else {
-                    $score -= 15;
+                } elseif ($diffMinutes > 180) {
+                    $score -= 10;
                 }
             } catch (\Throwable) {
                 // Ignore parse errors
@@ -808,6 +902,73 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         }
 
         return $matches;
+    }
+
+    /**
+     * Apply German→English team name aliases to a string.
+     */
+    private function applyTeamAliases(string $text): string
+    {
+        foreach (self::TEAM_NAME_ALIASES as $de => $en) {
+            $text = str_replace($de, $en, $text);
+        }
+
+        return $text;
+    }
+
+    /**
+     * Check if a team name from SportsDB is found in the EPG title.
+     * Tries with and without German→English aliases.
+     */
+    private function teamNameMatches(string $teamName, string $progTitle, string $progTitleAliased): bool
+    {
+        if ($teamName === '') {
+            return false;
+        }
+
+        // Direct substring match
+        if (str_contains($progTitle, $teamName)) {
+            return true;
+        }
+
+        // Try with aliases applied to the EPG title
+        if (str_contains($progTitleAliased, $teamName)) {
+            return true;
+        }
+
+        // Try significant words of team name (e.g. "Bayern" from "Bayern Munich")
+        $teamTokens = array_filter(
+            preg_split('/[\s]+/', $teamName, -1, PREG_SPLIT_NO_EMPTY),
+            fn (string $t) => mb_strlen($t) >= 4 && ! in_array($t, ['the', 'club', 'city', 'team', 'united', 'real', 'sporting'], true)
+        );
+
+        foreach ($teamTokens as $token) {
+            if (str_contains($progTitle, $token) || str_contains($progTitleAliased, $token)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Fuzzy check if one team name contains significant parts of another.
+     */
+    private function fuzzyTeamContains(string $haystack, string $needle): bool
+    {
+        if ($haystack === '' || $needle === '') {
+            return false;
+        }
+
+        if (str_contains($haystack, $needle) || str_contains($needle, $haystack)) {
+            return true;
+        }
+
+        $haystackAliased = $this->applyTeamAliases($haystack);
+        $needleAliased = $this->applyTeamAliases($needle);
+
+        return str_contains($haystackAliased, $needleAliased)
+            || str_contains($needleAliased, $haystackAliased);
     }
 
     // ── Enrichment ──────────────────────────────────────────────────
