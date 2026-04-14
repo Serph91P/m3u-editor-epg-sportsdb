@@ -47,7 +47,9 @@ Enriches EPG sport programmes with artwork and event details from [TheSportsDB](
 ## Version History
 
 ### 1.0.0
-- Initial release — extracted from EPG Enricher plugin as standalone SportsDB enricher
+- Initial release — extracted from [EPG Enricher](https://github.com/Serph91P/m3u-editor-epg-enricher) plugin as standalone SportsDB enricher
 - Multi-sport fetching strategy for free tier (12 sport types × n days)
 - Improved title matching with EPG title cleaning, bidirectional fuzzy matching, team name detection
 - Premium tier support via `eventstv.php` with country filtering
+- Rate limiting (2.1s between requests) to respect 30 req/min free tier limit
+- Incremental processing with file hash tracking to skip unchanged days
