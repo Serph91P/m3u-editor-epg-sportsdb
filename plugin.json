@@ -1,7 +1,7 @@
 {
   "id": "epg-sportsdb",
   "name": "EPG SportsDB Enricher",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "api_version": "1.0.0",
   "description": "Enriches EPG sport programmes with artwork and event details from TheSportsDB. Uses smart multi-sport fetching on the free tier (30 req/min) and full TV schedule matching with a premium API key.",
   "repository": "Serph91P/m3u-editor-epg-sportsdb",
