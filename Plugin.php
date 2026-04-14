@@ -17,6 +17,66 @@ use Illuminate\Support\Facades\Storage;
 class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
 {
     /**
+     * Map of country name → list of TheSportsDB league API names to query.
+     * Used on the free tier via eventsday.php?l=LEAGUE to get country-specific events.
+     * League names match the API parameter format (underscores, as seen in thesportsdb.com URLs).
+     *
+     * @var array<string, list<string>>
+     */
+    private const array LEAGUES_BY_COUNTRY = [
+        'Germany' => [
+            'German_Bundesliga',
+            'German_2_Bundesliga',
+            'German_DFB_Pokal',
+            'German_Bundesliga_Handball',
+            'German_DEL',
+        ],
+        'Austria' => [
+            'Austrian_Football_Bundesliga',
+        ],
+        'Switzerland' => [
+            'Swiss_Super_League',
+        ],
+        'England' => [
+            'English_Premier_League',
+            'English_League_Championship',
+            'English_FA_Cup',
+            'English_League_Cup',
+        ],
+        'Spain' => [
+            'Spanish_La_Liga',
+            'Spanish_Copa_del_Rey',
+        ],
+        'Italy' => [
+            'Serie_A',
+            'Coppa_Italia',
+        ],
+        'France' => [
+            'French_Ligue_1',
+            'French_Coupe_de_France',
+        ],
+        'Netherlands' => [
+            'Dutch_Eredivisie',
+        ],
+        'Portugal' => [
+            'Portuguese_Primeira_Liga',
+        ],
+        'Belgium' => [
+            'Belgian_Pro_League',
+        ],
+        'Turkey' => [
+            'Turkish_Super_Lig',
+        ],
+        'International' => [
+            'UEFA_Champions_League',
+            'UEFA_Europa_League',
+            'UEFA_Europa_Conference_League',
+            'FIFA_World_Cup',
+            'UEFA_Euro',
+        ],
+    ];
+
+    /**
      * Sport types to query on the free tier via eventsday.php?s=SPORT.
      * Each yields up to 5 events per day. Covers major sports seen in German TV EPGs.
      */
@@ -305,6 +365,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                 $enrichPosters,
                 $enrichDescriptions,
                 $context,
+                $settings,
             );
 
             $stats['programmes_processed'] += $result['processed'];
@@ -355,7 +416,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
      * Free tier: queries eventsday.php per sport type per day (5 results each).
      * Premium: queries eventstv.php per day (up to 500 results with channel info).
      *
-     * @return array<string, list<array>>  Events grouped by date (Y-m-d)
+     * @return array<string, list<array>> Events grouped by date (Y-m-d)
      */
     private function fetchEventsForDateRange(
         Carbon $startDate,
@@ -384,8 +445,8 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                 $stats['events_fetched'] += count($events);
                 $allEvents[$dateStr] = $events;
 
-                $context->info("Fetched {$dateStr}: " . count($events) . ' TV events (premium)');
-                $context->heartbeat("Fetched {$dateStr}: " . count($events) . ' TV events (premium)');
+                $context->info("Fetched {$dateStr}: ".count($events).' TV events (premium)');
+                $context->heartbeat("Fetched {$dateStr}: ".count($events).' TV events (premium)');
             } else {
                 foreach (self::SPORT_TYPES as $sport) {
                     if ($context->cancellationRequested()) {
@@ -410,10 +471,34 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                     usleep(self::REQUEST_DELAY_US);
                 }
 
+                // Query leagues from selected countries
+                $leagueNames = $this->resolveLeagueNames($context->settings);
+                foreach ($leagueNames as $league) {
+                    if ($context->cancellationRequested()) {
+                        break;
+                    }
+
+                    $events = $this->fetchFreeDayLeagueEvents($key, $dateStr, $league);
+                    $stats['api_requests']++;
+                    $stats['events_fetched'] += count($events);
+
+                    foreach ($events as $event) {
+                        $eventId = $event['idEvent'] ?? null;
+                        if ($eventId !== null) {
+                            $allEvents[$dateStr][$eventId] = $event;
+                        } else {
+                            $allEvents[$dateStr][] = $event;
+                        }
+                    }
+
+                    usleep(self::REQUEST_DELAY_US);
+                }
+
                 $allEvents[$dateStr] = array_values($allEvents[$dateStr]);
                 $eventCount = count($allEvents[$dateStr]);
-                $context->info("Fetched {$dateStr}: {$eventCount} events across " . count(self::SPORT_TYPES) . ' sport types');
-                $context->heartbeat("Fetched {$dateStr}: {$eventCount} events across " . count(self::SPORT_TYPES) . ' sport types');
+                $leagueCount = count($leagueNames);
+                $context->info("Fetched {$dateStr}: {$eventCount} events across ".count(self::SPORT_TYPES)." sport types + {$leagueCount} leagues");
+                $context->heartbeat("Fetched {$dateStr}: {$eventCount} events (".count(self::SPORT_TYPES)." sports + {$leagueCount} leagues)");
             }
 
             $currentDate->addDay();
@@ -436,6 +521,59 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
     }
 
     /**
+     * Fetch events for a single day + specific league via eventsday.php (free tier).
+     * Returns up to 5 events for that league, ideal for country-specific leagues.
+     *
+     * @return list<array>
+     */
+    private function fetchFreeDayLeagueEvents(string $apiKey, string $date, string $league): array
+    {
+        $leagueParam = urlencode(str_replace(' ', '_', $league));
+        $url = "https://www.thesportsdb.com/api/v1/json/{$apiKey}/eventsday.php?d={$date}&l={$leagueParam}";
+
+        return $this->httpGetJson($url, 'events') ?? [];
+    }
+
+    /**
+     * Resolve the full list of league names to query, based on settings.
+     * Merges leagues from selected countries with any manually specified custom leagues.
+     *
+     * @return list<string>
+     */
+    private function resolveLeagueNames(array $settings): array
+    {
+        $leagues = [];
+
+        // Leagues from selected countries
+        $selectedCountries = $settings['league_countries'] ?? ['Germany'];
+        if (! is_array($selectedCountries)) {
+            $selectedCountries = [$selectedCountries];
+        }
+
+        foreach ($selectedCountries as $country) {
+            $countryLeagues = self::LEAGUES_BY_COUNTRY[$country] ?? [];
+            foreach ($countryLeagues as $league) {
+                $leagues[$league] = true;
+            }
+        }
+
+        // Manually specified custom leagues (tags field)
+        $customLeagues = $settings['custom_leagues'] ?? [];
+        if (! is_array($customLeagues)) {
+            $customLeagues = [];
+        }
+
+        foreach ($customLeagues as $league) {
+            $league = trim((string) $league);
+            if ($league !== '') {
+                $leagues[$league] = true;
+            }
+        }
+
+        return array_keys($leagues);
+    }
+
+    /**
      * Fetch TV schedule events for a single day via eventstv.php (premium).
      *
      * @return list<array>
@@ -444,7 +582,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
     {
         $url = "https://www.thesportsdb.com/api/v1/json/{$apiKey}/eventstv.php?d={$date}";
         if ($country !== '') {
-            $url .= '&a=' . urlencode(str_replace(' ', '_', $country));
+            $url .= '&a='.urlencode(str_replace(' ', '_', $country));
         }
 
         return $this->httpGetJson($url, 'tvevents') ?? [];
@@ -508,6 +646,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         bool $enrichPosters,
         bool $enrichDescriptions,
         PluginExecutionContext $context,
+        array $settings = [],
     ): array {
         $result = [
             'processed' => 0,
@@ -549,8 +688,16 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                 $programme = $record['programme'];
                 $category = $programme['category'] ?? '';
 
-                // Only process programmes categorized as Sports
-                if ($category !== 'Sports') {
+                // Skip non-sport programmes unless match_without_category is enabled
+                // and the programme title contains a known sports keyword.
+                $isSports = $category === 'Sports';
+                if (! $isSports && ($settings['match_without_category'] ?? false)) {
+                    $titleLower = mb_strtolower($programme['title'] ?? '');
+                    $isSports = (bool) preg_match('/\b(?:bundesliga|football|fußball|soccer|golf|f1|formula\s*1|motorsport|motogp|nba|nhl|nfl|tennis|handball|rugby|cycling|radrennen|tour de france|champions league|europa league|dfb.pokal|premier league|la liga|serie\s*a)\b/iu', $titleLower);
+                }
+
+                // Only process programmes identified as sports
+                if (! $isSports) {
                     $enrichedLines[] = $line;
 
                     continue;
@@ -558,7 +705,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
 
                 $result['processed']++;
 
-                $matchedEvent = $this->matchSportsEvent($programme, $events);
+                $matchedEvent = $this->matchSportsEvent($programme, $events, $settings);
                 if ($matchedEvent) {
                     $eventName = $matchedEvent['strEvent'] ?? 'unknown';
                     $context->info("Matched: \"{$programme['title']}\" → \"{$eventName}\"");
@@ -597,10 +744,10 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         }
 
         if ($result['modified']) {
-            $tempPath = $fullPath . '.sportsdb-enriching';
+            $tempPath = $fullPath.'.sportsdb-enriching';
             if (($handle = fopen($tempPath, 'w')) !== false) {
                 foreach ($enrichedLines as $line) {
-                    fwrite($handle, $line . "\n");
+                    fwrite($handle, $line."\n");
                 }
                 fclose($handle);
 
@@ -628,9 +775,9 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
      *
      * @param  array  $programme  The EPG programme data
      * @param  list<array>  $events  SportsDB events for the day
-     * @return array|null  The best matching event, or null
+     * @return array|null The best matching event, or null
      */
-    private function matchSportsEvent(array $programme, array $events): ?array
+    private function matchSportsEvent(array $programme, array $events, array $settings = []): ?array
     {
         if (empty($events)) {
             return null;
@@ -663,8 +810,20 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
             }
         }
 
-        // Require a reasonable confidence score
-        return $bestScore >= 35 ? $bestMatch : null;
+        // Require a reasonable confidence score.
+        // For individual sports (Golf, Tennis, F1) where the best matched event has no team
+        // names, the maximum achievable score is ~60 instead of ~115 (no 50-pt team bonus).
+        // Use a lower threshold in that case to avoid filtering out valid matches.
+        $threshold = (int) ($settings['match_threshold'] ?? 35);
+
+        if ($bestMatch !== null) {
+            $hasTeams = ($bestMatch['strHomeTeam'] ?? '') !== '' || ($bestMatch['strAwayTeam'] ?? '') !== '';
+            if (! $hasTeams && $threshold > 20) {
+                $threshold = 20;
+            }
+        }
+
+        return $bestScore >= $threshold ? $bestMatch : null;
     }
 
     /**
@@ -708,10 +867,14 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         // Normalize "Team @ Team" → "Team vs Team"
         $title = str_replace(' @ ', ' vs ', $title);
 
-        // Normalize " - " separator to " vs " for team matchups
-        // Only when it looks like "Team A - Team B" (not "F1: Rennen - GP China")
+        // Normalize " - " separator to " vs " for team matchups only.
+        // Do NOT apply when either side contains generic individual-sport words
+        // (e.g. "F1: Rennen - GP Australien" must not become "Rennen vs GP Australien")
         if (preg_match('/^([A-ZÄÖÜa-zäöü0-9][\w\s.]+\S)\s+-\s+(\S[\w\s.]+)$/u', trim($title), $m)) {
-            $title = $m[1] . ' vs ' . $m[2];
+            $individualSportPattern = '/\b(?:rennen|qualifying|training|sprint|race|session|gp|stage|tour|lap|heat|round|etappe|lauf|tag|practice|warm.?up)\b/iu';
+            if (! preg_match($individualSportPattern, $m[1]) && ! preg_match($individualSportPattern, $m[2])) {
+                $title = $m[1].' vs '.$m[2];
+            }
         }
 
         return trim($title);
@@ -833,7 +996,7 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         $eventDate = $event['dateEvent'] ?? null;
         $eventTime = $event['strTime'] ?? null;
         if (! $eventTimestamp && $eventDate && $eventTime) {
-            $eventTimestamp = $eventDate . ' ' . $eventTime;
+            $eventTimestamp = $eventDate.' '.$eventTime;
         }
 
         if ($progStart && $eventTimestamp) {
@@ -1152,6 +1315,10 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
             'enrich_descriptions' => $settings['enrich_descriptions'] ?? true,
             'sportsdb_api_key' => $settings['sportsdb_api_key'] ?? '',
             'sportsdb_country' => $settings['sportsdb_country'] ?? '',
+            'league_countries' => $settings['league_countries'] ?? ['Germany'],
+            'custom_leagues' => $settings['custom_leagues'] ?? [],
+            'match_threshold' => $settings['match_threshold'] ?? 35,
+            'match_without_category' => $settings['match_without_category'] ?? false,
         ];
 
         return md5(json_encode($relevant));
