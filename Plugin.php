@@ -24,18 +24,24 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
      * @var array<string, list<string>>
      */
     private const array LEAGUES_BY_COUNTRY = [
+        // Europe — Football
         'Germany' => [
             'German_Bundesliga',
             'German_2_Bundesliga',
             'German_DFB_Pokal',
             'German_Bundesliga_Handball',
             'German_DEL',
+            'German_Basketball_Bundesliga',
         ],
         'Austria' => [
             'Austrian_Football_Bundesliga',
         ],
         'Switzerland' => [
             'Swiss_Super_League',
+        ],
+        'Scotland' => [
+            'Scottish_Premiership',
+            'Scottish_FA_Cup',
         ],
         'England' => [
             'English_Premier_League',
@@ -45,14 +51,17 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         ],
         'Spain' => [
             'Spanish_La_Liga',
+            'Spanish_Segunda_Division',
             'Spanish_Copa_del_Rey',
         ],
         'Italy' => [
             'Serie_A',
+            'Serie_B',
             'Coppa_Italia',
         ],
         'France' => [
             'French_Ligue_1',
+            'French_Ligue_2',
             'French_Coupe_de_France',
         ],
         'Netherlands' => [
@@ -67,12 +76,51 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         'Turkey' => [
             'Turkish_Super_Lig',
         ],
+        'Russia' => [
+            'Russian_Premier_League',
+        ],
+        'Greece' => [
+            'Greek_Super_League',
+        ],
+        // Europe — International
         'International' => [
             'UEFA_Champions_League',
             'UEFA_Europa_League',
             'UEFA_Europa_Conference_League',
             'FIFA_World_Cup',
             'UEFA_Euro',
+        ],
+        // North America
+        'USA' => [
+            'NBA',
+            'NHL',
+            'NFL',
+            'MLB',
+            'Major_League_Soccer',
+        ],
+        // South America
+        'Brazil' => [
+            'Brazilian_Serie_A',
+            'Brazilian_Serie_B',
+        ],
+        'Argentina' => [
+            'Argentine_Primera_Division',
+        ],
+        'Mexico' => [
+            'Mexican_Liga_MX',
+        ],
+        // Asia / Pacific
+        'Japan' => [
+            'Japanese_J_League',
+        ],
+        'South Korea' => [
+            'Korean_K_League_1',
+        ],
+        'Australia' => [
+            'Australian_A-League',
+            'Australian_NBL',
+            'Australian_NRL',
+            'Australian_AFL',
         ],
     ];
 
@@ -303,6 +351,22 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
             $context,
         );
 
+        // For the free tier, also fetch league events over an extended lookback window.
+        // This allows matching EPG replay broadcasts against recent league matches
+        // (e.g. last weekend's Bundesliga game rebroadcast on Monday/Tuesday).
+        $leagueEventPool = [];
+        if ($apiKey === '') {
+            $context->heartbeat('Pre-fetching league events (14-day lookback for replay matching)...');
+            $leagueEventPool = $this->fetchLeagueEventPool(
+                $currentDate->copy(),
+                $endDate->copy(),
+                $settings,
+                14,
+                $stats,
+                $context,
+            );
+        }
+
         $newFileStates = [];
 
         while ($currentDate->lte($endDate)) {
@@ -348,19 +412,23 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                 continue;
             }
 
-            $dayEventsCount = count($allEvents[$dateStr] ?? []);
-            $context->info("Processing {$dateStr} ({$dayIndex}/{$totalDays}) - {$dayEventsCount} events available");
+            // Merge day-specific sport-type events with the pre-fetched league pool.
+            // Day events may be empty on non-match days (e.g. international breaks);
+            // the league pool covers the past 14 days so replay content can still be matched.
+            $dayEvents = $allEvents[$dateStr] ?? [];
+            $mergedEvents = $this->mergeEventArrays($dayEvents, $leagueEventPool);
+
+            $mergedEventsCount = count($mergedEvents);
+            $context->info("Processing {$dateStr} ({$dayIndex}/{$totalDays}) - {$mergedEventsCount} events available (pool)");
             $context->heartbeat(
                 "Processing {$dateStr} ({$dayIndex}/{$totalDays})...",
                 progress: (int) (($dayIndex / $totalDays) * 100)
             );
 
-            $dayEvents = $allEvents[$dateStr] ?? [];
-
             $result = $this->processDateFile(
                 $jsonlFile,
                 $targetChannelIds,
-                $dayEvents,
+                $mergedEvents,
                 $overwrite,
                 $enrichPosters,
                 $enrichDescriptions,
@@ -471,34 +539,13 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
                     usleep(self::REQUEST_DELAY_US);
                 }
 
-                // Query leagues from selected countries
-                $leagueNames = $this->resolveLeagueNames($context->settings);
-                foreach ($leagueNames as $league) {
-                    if ($context->cancellationRequested()) {
-                        break;
-                    }
-
-                    $events = $this->fetchFreeDayLeagueEvents($key, $dateStr, $league);
-                    $stats['api_requests']++;
-                    $stats['events_fetched'] += count($events);
-
-                    foreach ($events as $event) {
-                        $eventId = $event['idEvent'] ?? null;
-                        if ($eventId !== null) {
-                            $allEvents[$dateStr][$eventId] = $event;
-                        } else {
-                            $allEvents[$dateStr][] = $event;
-                        }
-                    }
-
-                    usleep(self::REQUEST_DELAY_US);
-                }
-
+                // League events are fetched separately via fetchLeagueEventPool() with
+                // a 14-day lookback window to handle replay content. Do not query per-day
+                // here to avoid double-counting and unnecessary extra API requests.
                 $allEvents[$dateStr] = array_values($allEvents[$dateStr]);
                 $eventCount = count($allEvents[$dateStr]);
-                $leagueCount = count($leagueNames);
-                $context->info("Fetched {$dateStr}: {$eventCount} events across ".count(self::SPORT_TYPES)." sport types + {$leagueCount} leagues");
-                $context->heartbeat("Fetched {$dateStr}: {$eventCount} events (".count(self::SPORT_TYPES)." sports + {$leagueCount} leagues)");
+                $context->info("Fetched {$dateStr}: {$eventCount} sport-type events across ".count(self::SPORT_TYPES).' sport types');
+                $context->heartbeat("Fetched {$dateStr}: {$eventCount} sport-type events");
             }
 
             $currentDate->addDay();
@@ -532,6 +579,103 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         $url = "https://www.thesportsdb.com/api/v1/json/{$apiKey}/eventsday.php?d={$date}&l={$leagueParam}";
 
         return $this->httpGetJson($url, 'events') ?? [];
+    }
+
+    /**
+     * Fetch league events over an extended date window (lookback + EPG range).
+     *
+     * Returns a flat, deduplicated pool of events. Used for matching EPG replay
+     * broadcasts against recent matches that were played before the broadcast date.
+     *
+     * @param  int  $lookbackDays  How many days before $startDate to include
+     * @return list<array>
+     */
+    private function fetchLeagueEventPool(
+        Carbon $startDate,
+        Carbon $endDate,
+        array $settings,
+        int $lookbackDays,
+        array &$stats,
+        PluginExecutionContext $context,
+    ): array {
+        $leagueNames = $this->resolveLeagueNames($settings);
+        if (empty($leagueNames)) {
+            return [];
+        }
+
+        $apiKey = $settings['sportsdb_api_key'] ?? '';
+        $key = $apiKey !== '' ? $apiKey : '123';
+
+        $pool = [];
+        $fetchStart = $startDate->copy()->subDays($lookbackDays);
+        $current = $fetchStart->copy();
+        $leagueCount = count($leagueNames);
+        $totalDays = (int) $fetchStart->diffInDays($endDate) + 1;
+
+        $context->info("Pre-fetching {$leagueCount} league(s) over {$totalDays} days (lookback {$lookbackDays}d)...");
+
+        while ($current->lte($endDate)) {
+            $dateStr = $current->format('Y-m-d');
+
+            foreach ($leagueNames as $league) {
+                if ($context->cancellationRequested()) {
+                    break 2;
+                }
+
+                $events = $this->fetchFreeDayLeagueEvents($key, $dateStr, $league);
+                $stats['api_requests']++;
+                $stats['events_fetched'] += count($events);
+
+                foreach ($events as $event) {
+                    $id = $event['idEvent'] ?? null;
+                    if ($id !== null) {
+                        $pool[$id] = $event;
+                    } else {
+                        $pool[] = $event;
+                    }
+                }
+
+                usleep(self::REQUEST_DELAY_US);
+            }
+
+            $current->addDay();
+        }
+
+        $pool = array_values($pool);
+        $context->info('League event pool ready: '.count($pool).' unique events.');
+
+        return $pool;
+    }
+
+    /**
+     * Merge two event arrays, deduplicating by event ID.
+     * Day events take priority (keyed first) so live events are not overwritten.
+     *
+     * @return list<array>
+     */
+    private function mergeEventArrays(array $dayEvents, array $poolEvents): array
+    {
+        $merged = [];
+
+        foreach ($dayEvents as $event) {
+            $id = $event['idEvent'] ?? null;
+            if ($id !== null) {
+                $merged[$id] = $event;
+            } else {
+                $merged[] = $event;
+            }
+        }
+
+        foreach ($poolEvents as $event) {
+            $id = $event['idEvent'] ?? null;
+            if ($id !== null && ! isset($merged[$id])) {
+                $merged[$id] = $event;
+            } elseif ($id === null) {
+                $merged[] = $event;
+            }
+        }
+
+        return array_values($merged);
     }
 
     /**
@@ -1007,8 +1151,6 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
 
                 if ($diffMinutes <= 90) {
                     $score += 30 * (1 - $diffMinutes / 90);
-                } elseif ($diffMinutes > 180) {
-                    $score -= 10;
                 }
             } catch (\Throwable) {
                 // Ignore parse errors
