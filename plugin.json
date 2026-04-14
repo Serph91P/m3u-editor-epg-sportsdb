@@ -66,9 +66,12 @@
         },
         {
             "id": "auto_run_playlists",
-            "type": "multi_select_model:playlist",
+            "type": "model_select",
             "label": "Restrict auto-run to playlists",
-            "default": [],
+            "model": "App\\Models\\Playlist",
+            "scope": "owned",
+            "multiple": true,
+            "required": false,
             "helper_text": "Only auto-run for these playlists. Leave empty to process all playlists linked to the EPG."
         }
     ],
@@ -81,8 +84,10 @@
             "fields": [
                 {
                     "id": "playlist_id",
-                    "type": "select_model:playlist",
+                    "type": "model_select",
                     "label": "Playlist",
+                    "model": "App\\Models\\Playlist",
+                    "scope": "owned",
                     "required": true,
                     "helper_text": "Select the playlist whose sport programmes should be enriched."
                 }
