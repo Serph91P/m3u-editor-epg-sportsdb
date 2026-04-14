@@ -32,9 +32,38 @@
     {
       "id": "sportsdb_country",
       "type": "text",
-      "label": "Country filter",
+      "label": "Country filter (premium only)",
       "default": "Germany",
       "helper_text": "Filter TV schedule by country (e.g. 'Germany', 'United Kingdom'). Only used with a premium API key."
+    },
+    {
+      "id": "league_countries",
+      "type": "select",
+      "multiple": true,
+      "label": "Countries to fetch leagues for (free tier)",
+      "default": ["Germany"],
+      "options": {
+        "Germany": "Germany",
+        "Austria": "Austria",
+        "Switzerland": "Switzerland",
+        "England": "England",
+        "Spain": "Spain",
+        "Italy": "Italy",
+        "France": "France",
+        "Netherlands": "Netherlands",
+        "Portugal": "Portugal",
+        "Belgium": "Belgium",
+        "Turkey": "Turkey",
+        "International": "International (UEFA/FIFA)"
+      },
+      "helper_text": "Select which countries' top leagues to fetch from TheSportsDB on the free tier. Each country adds a few extra API requests per day. Not used when a premium API key is set."
+    },
+    {
+      "id": "custom_leagues",
+      "type": "tags",
+      "label": "Custom leagues (free tier)",
+      "default": [],
+      "helper_text": "Additional TheSportsDB league names to query (e.g. 'Italian_Serie_B', 'MLS'). Find the name in the league's URL on thesportsdb.com. Not used when a premium API key is set."
     },
     {
       "id": "enrich_posters",
@@ -56,6 +85,20 @@
       "label": "Overwrite existing data",
       "default": false,
       "helper_text": "Replace existing artwork and descriptions. When disabled, only programmes with missing data are enriched."
+    },
+    {
+      "id": "match_threshold",
+      "type": "number",
+      "label": "Match confidence threshold",
+      "default": 35,
+      "helper_text": "Minimum match score (0–115) required to accept a SportsDB event as a match. Lower values match more loosely. 35 is recommended for team sports; individual sports (Golf, F1, Tennis) automatically use 20."
+    },
+    {
+      "id": "match_without_category",
+      "type": "boolean",
+      "label": "Match programmes without Sports category",
+      "default": false,
+      "helper_text": "Also try to enrich programmes that are not categorised as Sports, but whose title contains a known sports keyword (e.g. Bundesliga, Champions League, Golf, F1)."
     },
     {
       "id": "auto_run_on_cache",
@@ -104,7 +147,8 @@
       "label": "Clear State",
       "description": "Reset enrichment tracking. Next run will re-process all files.",
       "icon": "heroicon-o-trash",
-      "confirm": "This will reset all enrichment tracking state. The next run will re-process every EPG file. Continue?"
+      "requires_confirmation": true,
+      "destructive": true
     }
   ]
 }
