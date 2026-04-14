@@ -356,12 +356,16 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         // (e.g. last weekend's Bundesliga game rebroadcast on Monday/Tuesday).
         $leagueEventPool = [];
         if ($apiKey === '') {
-            $context->heartbeat('Pre-fetching league events (14-day lookback for replay matching)...');
+            // Look back 7 days before the EPG start to cover last weekend's matches
+            // that are rebroadcast during the current EPG window.
+            // Total window = 7 + EPG_days (e.g. 7 + 4 = 11 days, not 18).
+            $lookbackDays = 7;
+            $context->heartbeat("Pre-fetching league events ({$lookbackDays}-day lookback for replay matching)...");
             $leagueEventPool = $this->fetchLeagueEventPool(
                 $currentDate->copy(),
                 $endDate->copy(),
                 $settings,
-                14,
+                $lookbackDays,
                 $stats,
                 $context,
             );
