@@ -24,18 +24,24 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
      * @var array<string, list<string>>
      */
     private const array LEAGUES_BY_COUNTRY = [
+        // Europe — Football
         'Germany' => [
             'German_Bundesliga',
             'German_2_Bundesliga',
             'German_DFB_Pokal',
             'German_Bundesliga_Handball',
             'German_DEL',
+            'German_Basketball_Bundesliga',
         ],
         'Austria' => [
             'Austrian_Football_Bundesliga',
         ],
         'Switzerland' => [
             'Swiss_Super_League',
+        ],
+        'Scotland' => [
+            'Scottish_Premiership',
+            'Scottish_FA_Cup',
         ],
         'England' => [
             'English_Premier_League',
@@ -45,14 +51,17 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         ],
         'Spain' => [
             'Spanish_La_Liga',
+            'Spanish_Segunda_Division',
             'Spanish_Copa_del_Rey',
         ],
         'Italy' => [
             'Serie_A',
+            'Serie_B',
             'Coppa_Italia',
         ],
         'France' => [
             'French_Ligue_1',
+            'French_Ligue_2',
             'French_Coupe_de_France',
         ],
         'Netherlands' => [
@@ -67,12 +76,51 @@ class Plugin implements EpgProcessorPluginInterface, HookablePluginInterface
         'Turkey' => [
             'Turkish_Super_Lig',
         ],
+        'Russia' => [
+            'Russian_Premier_League',
+        ],
+        'Greece' => [
+            'Greek_Super_League',
+        ],
+        // Europe — International
         'International' => [
             'UEFA_Champions_League',
             'UEFA_Europa_League',
             'UEFA_Europa_Conference_League',
             'FIFA_World_Cup',
             'UEFA_Euro',
+        ],
+        // North America
+        'USA' => [
+            'NBA',
+            'NHL',
+            'NFL',
+            'MLB',
+            'Major_League_Soccer',
+        ],
+        // South America
+        'Brazil' => [
+            'Brazilian_Serie_A',
+            'Brazilian_Serie_B',
+        ],
+        'Argentina' => [
+            'Argentine_Primera_Division',
+        ],
+        'Mexico' => [
+            'Mexican_Liga_MX',
+        ],
+        // Asia / Pacific
+        'Japan' => [
+            'Japanese_J_League',
+        ],
+        'South Korea' => [
+            'Korean_K_League_1',
+        ],
+        'Australia' => [
+            'Australian_A-League',
+            'Australian_NBL',
+            'Australian_NRL',
+            'Australian_AFL',
         ],
     ];
 
