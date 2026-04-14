@@ -1,0 +1,105 @@
+{
+    "id": "epg-sportsdb",
+    "name": "EPG SportsDB Enricher",
+    "version": "1.0.0",
+    "api_version": "1.0.0",
+    "description": "Enriches EPG sport programmes with artwork and event details from TheSportsDB. Uses smart multi-sport fetching on the free tier (30 req/min) and full TV schedule matching with a premium API key.",
+    "repository": "Serph91P/m3u-editor-epg-sportsdb",
+    "entrypoint": "Plugin.php",
+    "class": "AppLocalPlugins\\EpgSportsdb\\Plugin",
+    "capabilities": [
+        "epg_processor"
+    ],
+    "hooks": [
+        "epg.cache.generated"
+    ],
+    "permissions": [
+        "db_read",
+        "filesystem_read",
+        "filesystem_write",
+        "network_egress",
+        "hook_subscriptions",
+        "queue_jobs"
+    ],
+    "settings": [
+        {
+            "id": "sportsdb_api_key",
+            "type": "text",
+            "label": "TheSportsDB API key (optional)",
+            "default": "",
+            "helper_text": "Your TheSportsDB premium API key for full TV schedule matching (500 events/day). Leave empty to use the free tier (5 events per sport per day, 30 req/min)."
+        },
+        {
+            "id": "sportsdb_country",
+            "type": "text",
+            "label": "Country filter",
+            "default": "Germany",
+            "helper_text": "Filter TV schedule by country (e.g. 'Germany', 'United Kingdom'). Only used with a premium API key."
+        },
+        {
+            "id": "enrich_posters",
+            "type": "boolean",
+            "label": "Add event artwork",
+            "default": true,
+            "helper_text": "Add event poster/thumbnail images to sport programmes."
+        },
+        {
+            "id": "enrich_descriptions",
+            "type": "boolean",
+            "label": "Add event descriptions",
+            "default": true,
+            "helper_text": "Add sport, league, season and venue info as programme description."
+        },
+        {
+            "id": "overwrite_existing",
+            "type": "boolean",
+            "label": "Overwrite existing data",
+            "default": false,
+            "helper_text": "Replace existing artwork and descriptions. When disabled, only programmes with missing data are enriched."
+        },
+        {
+            "id": "auto_run_on_cache",
+            "type": "boolean",
+            "label": "Auto-run after EPG cache generation",
+            "default": true,
+            "helper_text": "Automatically enrich sport programmes whenever the EPG cache is rebuilt."
+        },
+        {
+            "id": "auto_run_playlists",
+            "type": "multi_select_model:playlist",
+            "label": "Restrict auto-run to playlists",
+            "default": [],
+            "helper_text": "Only auto-run for these playlists. Leave empty to process all playlists linked to the EPG."
+        }
+    ],
+    "actions": [
+        {
+            "id": "enrich_epg",
+            "label": "Enrich Sport Programmes",
+            "description": "Enrich sport programmes with TheSportsDB event data.",
+            "icon": "trophy",
+            "fields": [
+                {
+                    "id": "playlist_id",
+                    "type": "select_model:playlist",
+                    "label": "Playlist",
+                    "required": true,
+                    "helper_text": "Select the playlist whose sport programmes should be enriched."
+                }
+            ]
+        },
+        {
+            "id": "health_check",
+            "label": "Health Check",
+            "description": "Show plugin status and SportsDB API connectivity.",
+            "icon": "heart-pulse"
+        },
+        {
+            "id": "clear_state",
+            "label": "Clear State",
+            "description": "Reset enrichment tracking. Next run will re-process all files.",
+            "icon": "trash",
+            "confirm": "This will reset all enrichment tracking state. The next run will re-process every EPG file. Continue?"
+        }
+    ]
+}
